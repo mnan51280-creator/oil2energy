@@ -1,0 +1,20 @@
+{
+  "baseline_distance_km": 104.96,
+  "optimized_distance_km": 77.65,
+  "distance_saved_km": 27.31,
+  "distance_reduction_pct": 26.0,
+  "total_uco_collected_kg": 2504.7,
+  "baseline_kg_per_km": 23.86,
+  "optimized_kg_per_km": 32.26,
+  "number_of_stations_visited": 5,
+  "baseline_co2_kg": 28.34,
+  "optimized_co2_kg": 20.97,
+  "co2_avoided_kg": 7.37,
+  "stations_visited": [
+    "Bangsar UCO Hub",
+    "Cyberjaya UCO Hub",
+    "Puchong UCO Hub",
+    "Petaling Jaya UCO Hub",
+    "Gombak UCO Hub"
+  ]
+}

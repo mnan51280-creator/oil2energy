@@ -1,0 +1,4 @@
+scenario,description,stations_visited,simulated_route_distance_km,estimated_co2_kg,uco_collected_kg,uco_kg_per_km
+A — Conventional,All stations + fixed collection sequence,20,229.14,61.87,7301.8,31.87
+B — Smart Collection,Operational priority stations only + fixed sequence,5,104.96,28.34,2504.7,23.86
+C — OIL2ENERGY,Operational priority stations + heuristic route optimisation,5,77.65,20.97,2504.7,32.26
