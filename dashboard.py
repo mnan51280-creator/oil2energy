@@ -99,9 +99,20 @@ headline = st.columns(4)
 headline[0].metric("UCO Ready", f"{scenario_c['uco_collected_kg']:,.1f} kg", help="UCO ready for recovery at operational HIGH and CRITICAL stations")
 headline[1].metric("Priority Stations", int(scenario_c["stations_visited"]), help="Operational HIGH and CRITICAL stations selected for collection")
 headline[2].metric("Route Reduction", f"{bc_reduction:.1f}%", help="Simulation result: Scenario B versus C for the same priority stations")
-headline[3].metric("Estimated CO₂ Avoided", f"{bc_co2_avoided:.2f} kg", help="Scenario B versus C using the illustrative 0.27 kg CO₂/km factor")
-st.caption("Headline routing indicators compare the same priority stations: fixed sequence (B) versus heuristic sequence (C).")
+headline[3].metric(
+    "Estimated CO₂ Reduction",
+    f"{bc_co2_avoided:.2f} kg",
+    help=(
+        "Estimated operational CO₂ emissions reduction from Scenario B to Scenario C, "
+        "calculated using an illustrative factor of 0.27 kg CO₂/km. "
+        "This is a simulation-based estimate, not measured field emissions."
+    ),
+)
 
+st.caption(
+    "Headline routing indicators compare the same priority stations: "
+    "fixed sequence (B) versus heuristic sequence (C)."
+)
 st.header("1 — Three-Scenario Intelligence Comparison")
 st.caption("Simulation Result. A→B isolates the station-selection layer; B→C isolates the visit-sequence layer. Non-priority stations are deferred, not treated as recovered UCO.")
 scenario_cards = st.columns(3)
