@@ -124,7 +124,7 @@ headline[1].metric(
 )
 
 headline[2].metric(
-    "Road Distance Reduction",
+    "Distance Reduction",
     f"{bc_reduction:.1f}%",
     help="Scenario B versus C for the same priority stations, calculated using Google road-network driving distances",
 )
@@ -136,7 +136,7 @@ headline[3].metric(
 )
 
 headline[4].metric(
-    "Estimated CO₂ Reduction",
+    "CO₂ Reduction",
     f"{bc_co2_avoided:.2f} kg",
     help=(
         "Estimated operational CO₂ emissions reduction from Scenario B to Scenario C, "
@@ -264,7 +264,7 @@ st.markdown("""
 5. 2-opt heuristically improves the visit sequence.
 6. Simulation KPIs compare station-selection and route-sequence effects separately.
 
-This prototype demonstrates technical potential. Real deployment requires calibrated sensors and pilot validation using actual UCO generation, road-network, traffic, vehicle-capacity and operational data.
+This prototype demonstrates technical potential. Real deployment requires calibrated sensors and pilot validation using actual UCO generation, live traffic conditions, vehicle capacity and operational data.
 """)
 with st.expander("Simulation Assumptions & Prototype Boundaries"):
     st.markdown(f"""
