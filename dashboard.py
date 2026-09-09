@@ -6,7 +6,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from optimization import DEPOT, EMISSION_FACTOR_KG_CO2_PER_KM, calculate_scenario_comparison, run_route_optimization
+from optimization import (
+    DEPOT,
+    EMISSION_FACTOR_KG_CO2_PER_KM,
+    build_network_costs,
+    calculate_scenario_comparison,
+    run_route_optimization,
+)
 from simulation import DEFAULT_SEED, generate_station_data
 
 
@@ -39,7 +45,14 @@ def apply_styles() -> None:
 def load_model(seed: int) -> tuple[pd.DataFrame, dict, pd.DataFrame, object, pd.DataFrame]:
     stations = generate_station_data(seed=seed, save=True)
     results, demo_selected, route_figure = run_route_optimization(stations, save=True)
-    scenarios = calculate_scenario_comparison(stations)
+    distance_matrix_km, duration_matrix_min, node_index = build_network_costs(stations)
+
+    scenarios = calculate_scenario_comparison(
+        stations,
+        distance_matrix_km,
+        duration_matrix_min,
+        node_index,
+    )
     return stations, results, demo_selected, route_figure, scenarios
 
 
@@ -81,6 +94,7 @@ ab_reduction = percentage_reduction(scenario_a["simulated_route_distance_km"], s
 bc_reduction = percentage_reduction(scenario_b["simulated_route_distance_km"], scenario_c["simulated_route_distance_km"])
 ac_reduction = percentage_reduction(scenario_a["simulated_route_distance_km"], scenario_c["simulated_route_distance_km"])
 bc_co2_avoided = scenario_b["estimated_co2_kg"] - scenario_c["estimated_co2_kg"]
+bc_time_saved = scenario_b["estimated_driving_time_min"] - scenario_c["estimated_driving_time_min"]
 
 st.markdown('<div class="hero"><h1>OIL2ENERGY</h1><p>Smart UCO Collection Intelligence Platform</p><p><b>Proof-of-Concept Simulation | Klang Valley</b></p></div>', unsafe_allow_html=True)
 st.markdown('<div class="disclaimer"><b>Proof-of-concept:</b> Simulation result under stated assumptions; not measured field performance.</div>', unsafe_allow_html=True)
@@ -95,24 +109,47 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-headline = st.columns(4)
-headline[0].metric("UCO Ready", f"{scenario_c['uco_collected_kg']:,.1f} kg", help="UCO ready for recovery at operational HIGH and CRITICAL stations")
-headline[1].metric("Priority Stations", int(scenario_c["stations_visited"]), help="Operational HIGH and CRITICAL stations selected for collection")
-headline[2].metric("Route Reduction", f"{bc_reduction:.1f}%", help="Simulation result: Scenario B versus C for the same priority stations")
+headline = st.columns(5)
+
+headline[0].metric(
+    "UCO Ready",
+    f"{scenario_c['uco_collected_kg']:,.1f} kg",
+    help="UCO ready for recovery at operational HIGH and CRITICAL stations",
+)
+
+headline[1].metric(
+    "Priority Stations",
+    int(scenario_c["stations_visited"]),
+    help="Operational HIGH and CRITICAL stations selected for collection",
+)
+
+headline[2].metric(
+    "Road Distance Reduction",
+    f"{bc_reduction:.1f}%",
+    help="Scenario B versus C for the same priority stations, calculated using Google road-network driving distances",
+)
+
 headline[3].metric(
+    "Driving Time Saved",
+    f"{bc_time_saved:.1f} min",
+    help="Estimated driving-time difference between Scenario B fixed sequence and Scenario C heuristic sequence using Google Routes API",
+)
+
+headline[4].metric(
     "Estimated CO₂ Reduction",
     f"{bc_co2_avoided:.2f} kg",
     help=(
         "Estimated operational CO₂ emissions reduction from Scenario B to Scenario C, "
-        "calculated using an illustrative factor of 0.27 kg CO₂/km. "
-        "This is a simulation-based estimate, not measured field emissions."
+        "calculated from the road-distance reduction using an illustrative factor of 0.27 kg CO₂/km. "
+        "This is a simulation-based estimate, not measured fleet emissions."
     ),
 )
 
 st.caption(
     "Headline routing indicators compare the same priority stations: "
-    "fixed sequence (B) versus heuristic sequence (C)."
+    "fixed sequence (B) versus heuristic sequence (C), using Google road-network driving metrics."
 )
+
 st.header("1 — Three-Scenario Intelligence Comparison")
 st.caption("Simulation Result. A→B isolates the station-selection layer; B→C isolates the visit-sequence layer. Non-priority stations are deferred, not treated as recovered UCO.")
 scenario_cards = st.columns(3)
@@ -122,7 +159,7 @@ scenario_cards[0].markdown(f"""
   <b>{int(scenario_a['stations_visited'])} stations</b><br>
   Fixed collection sequence
   <div class="distance">{scenario_a['simulated_route_distance_km']:.1f} km</div>
-  <div class="effect">Geographic-distance proxy</div>
+  <div class="effect">Google road-network driving distance</div>
 </div>
 """, unsafe_allow_html=True)
 scenario_cards[1].markdown(f"""
@@ -145,14 +182,14 @@ scenario_cards[2].markdown(f"""
 """, unsafe_allow_html=True)
 display_scenarios = scenarios.rename(columns={
     "scenario": "Scenario", "description": "Collection logic", "stations_visited": "Stations visited",
-    "simulated_route_distance_km": "Simulated route distance (km)", "estimated_co2_kg": "Estimated CO₂ (kg)",
+    "simulated_route_distance_km": "Road-network driving distance (km)", "estimated_co2_kg": "Estimated CO₂ (kg)",
     "uco_collected_kg": "UCO Ready for Collection (kg)", "uco_kg_per_km": "UCO (kg/km)",
 })
 st.caption("UCO ready for collection represents material scheduled in each simulated scenario. Non-priority station material is deferred. UCO kg/km is most directly comparable between B and C because they visit the same stations.")
 st.dataframe(display_scenarios, hide_index=True, width="stretch")
 chart = px.bar(
     scenarios, x="scenario", y="simulated_route_distance_km", color="scenario", text="simulated_route_distance_km",
-    labels={"scenario": "", "simulated_route_distance_km": "Simulated route distance (km)"},
+    labels={"scenario": "", "simulated_route_distance_km": "Road-network driving distance (km)"},
     color_discrete_sequence=["#64748b", "#14b8a6", "#047857"],
 )
 chart.update_traces(texttemplate="%{text:.1f} km", textposition="outside")
@@ -199,23 +236,23 @@ with st.expander("View All Simulated Stations"):
     })
     st.dataframe(priority_table[["Station", "Fill %", "Days to Full", "Priority Score", "Status", "Collection Required"]], hide_index=True, width="stretch")
 
-st.header("4 — Geographic-Distance Route Demonstration")
+st.header("4 — Road-Network Route Demonstration")
 st.caption("Nearest-neighbour + 2-opt routing heuristic. The interactive demonstration uses at least five stations for visibility; analytical Scenarios B and C use operational priority selection only, with no forced minimum.")
 fixed_demo, optimized_demo = st.columns(2)
 with fixed_demo:
     st.subheader("Demo Fixed Sequence")
     a, b, c = st.columns(3)
-    a.metric("Simulated Distance", f"{results['baseline_distance_km']:.1f} km")
+    a.metric("Driving Distance", f"{results['baseline_distance_km']:.1f} km")
     b.metric("Estimated CO₂", f"{results['baseline_co2_kg']:.1f} kg")
     c.metric("UCO per km", f"{results['baseline_kg_per_km']:.1f} kg/km")
 with optimized_demo:
     st.subheader("Demo Heuristic Sequence")
     a, b, c = st.columns(3)
-    a.metric("Simulated Distance", f"{results['optimized_distance_km']:.1f} km")
+    a.metric("Driving Distance", f"{results['optimized_distance_km']:.1f} km")
     b.metric("Estimated CO₂", f"{results['optimized_co2_kg']:.1f} kg")
     c.metric("UCO per km", f"{results['optimized_kg_per_km']:.1f} kg/km")
 st.caption("UCO kg/km is comparable here because both routes visit the same demo-selected stations.")
-st.info("Map lines show geographic-distance connections, not driven road paths.")
+st.info("Map connections are schematic. Route optimisation metrics are calculated using Google road-network driving distances; the displayed lines are not turn-by-turn road paths.")
 st.plotly_chart(route_figure, width="stretch", config={"displayModeBar": False})
 
 st.header("5 — Methodology")

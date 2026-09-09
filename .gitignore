@@ -1,0 +1,8 @@
+.streamlit/secrets.toml
+
+__pycache__/
+*.pyc
+*.save
+dashboard_before_*.py
+optimization_*_backup.py
+optimization_road_before_*.py

@@ -1,7 +1,3 @@
-"""Heuristic route optimisation for the OIL2ENERGY proof of concept."""
-
-from __future__ import annotations
-
 import json
 import math
 from pathlib import Path
@@ -10,8 +6,8 @@ from typing import Sequence
 import pandas as pd
 import plotly.graph_objects as go
 
+from google_routes import build_driving_matrices
 from simulation import DATA_PATH, DISCLAIMER, generate_station_data
-
 
 PROJECT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_DIR / "outputs"
@@ -58,64 +54,229 @@ def demo_selection(stations: pd.DataFrame, minimum: int = 5) -> pd.DataFrame:
 def select_stations(stations: pd.DataFrame, minimum: int = 5) -> pd.DataFrame:
     """Backward-compatible alias for the minimum-five interactive demo selection."""
     return demo_selection(stations, minimum)
+def build_network_costs(
+    stations: pd.DataFrame,
+) -> tuple[list[list[float]], list[list[float]], dict[int, int]]:
+    """
+    Build Google road-network driving distance and duration matrices
+    for the depot and all stations.
+    """
+
+    ordered_stations = (
+        stations
+        .sort_values("station_id")
+        .reset_index(drop=True)
+    )
+
+    points = [
+        DEPOT.copy(),
+        *ordered_stations.to_dict("records"),
+    ]
+
+    coordinates = [
+        (
+            float(point["latitude"]),
+            float(point["longitude"]),
+        )
+        for point in points
+    ]
+
+    distance_matrix_km, duration_matrix_min = build_driving_matrices(
+        coordinates
+    )
+
+    node_index = {
+        int(point["station_id"]): index
+        for index, point in enumerate(points)
+    }
+
+    return distance_matrix_km, duration_matrix_min, node_index
 
 
-def route_distance(route: Sequence[dict | pd.Series]) -> float:
-    return sum(haversine_km(route[i], route[i + 1]) for i in range(len(route) - 1))
+
+def route_cost(
+    route,
+    matrix,
+    node_index,
+) -> float:
+    """Calculate total route cost from a directional matrix."""
+
+    total = 0.0
+
+    for current, following in zip(route[:-1], route[1:]):
+        current_id = int(current["station_id"])
+        following_id = int(following["station_id"])
+
+        total += matrix[
+            node_index[current_id]
+        ][
+            node_index[following_id]
+        ]
+
+    return total
 
 
-def nearest_neighbour(stations: pd.DataFrame) -> list[dict]:
+def route_distance(
+    route: Sequence[dict | pd.Series],
+    distance_matrix_km: list[list[float]],
+    node_index: dict[int, int],
+) -> float:
+    total = 0.0
+
+    for current, following in zip(route[:-1], route[1:]):
+        current_id = int(current["station_id"])
+        following_id = int(following["station_id"])
+
+        total += distance_matrix_km[
+            node_index[current_id]
+        ][
+            node_index[following_id]
+        ]
+
+    return total
+
+def nearest_neighbour(
+    stations: pd.DataFrame,
+    distance_matrix_km: list[list[float]],
+    node_index: dict[int, int],
+) -> list[dict]:
     remaining = stations.to_dict("records")
     route: list[dict] = [DEPOT.copy()]
+
     while remaining:
-        nearest = min(remaining, key=lambda station: haversine_km(route[-1], station))
+        current_id = int(route[-1]["station_id"])
+        current_index = node_index[current_id]
+
+        nearest = min(
+            remaining,
+            key=lambda station: distance_matrix_km[
+                current_index
+            ][
+                node_index[int(station["station_id"])]
+            ],
+        )
+
         route.append(nearest)
         remaining.remove(nearest)
+
     route.append(DEPOT.copy())
+
     return route
 
-
-def two_opt(route: list[dict]) -> list[dict]:
-    """Improve a closed route by repeatedly reversing beneficial segments."""
+def two_opt(
+    route: list[dict],
+    distance_matrix_km: list[list[float]],
+    node_index: dict[int, int],
+) -> list[dict]:
     best = route[:]
     improved = True
+
     while improved:
         improved = False
-        best_distance = route_distance(best)
+
+        best_distance = route_distance(
+            best,
+            distance_matrix_km,
+            node_index,
+        )
+
         for i in range(1, len(best) - 2):
             for j in range(i + 1, len(best) - 1):
-                candidate = best[:i] + best[i : j + 1][::-1] + best[j + 1 :]
-                candidate_distance = route_distance(candidate)
+                candidate = (
+                    best[:i]
+                    + best[i : j + 1][::-1]
+                    + best[j + 1 :]
+                )
+
+                candidate_distance = route_distance(
+                    candidate,
+                    distance_matrix_km,
+                    node_index,
+                )
+
                 if candidate_distance + 1e-9 < best_distance:
-                    best, best_distance = candidate, candidate_distance
+                    best = candidate
+                    best_distance = candidate_distance
                     improved = True
-        # Continue until a complete pass makes no improvement.
+
     return best
 
+def scenario_metrics(
+    name: str,
+    description: str,
+    route: list[dict],
+    stations: pd.DataFrame,
+    distance_matrix_km: list[list[float]],
+    duration_matrix_min: list[list[float]],
+    node_index: dict[int, int],
+) -> dict:
+    """Calculate metrics for one simulated collection scenario."""
 
-def scenario_metrics(name: str, description: str, route: list[dict], stations: pd.DataFrame) -> dict:
-    """Calculate claim-safe metrics for one simulated collection scenario."""
-    distance = route_distance(route)
+    distance = route_distance(
+        route,
+        distance_matrix_km,
+        node_index,
+    )
+
+    duration = route_cost(
+        route,
+        duration_matrix_min,
+        node_index,
+    )
+
     uco = float(stations["current_uco_kg"].sum())
+
     return {
         "scenario": name,
         "description": description,
         "stations_visited": len(stations),
         "simulated_route_distance_km": round(distance, 2),
-        "estimated_co2_kg": round(distance * EMISSION_FACTOR_KG_CO2_PER_KM, 2),
+        "estimated_driving_time_min": round(duration, 1),
+        "estimated_co2_kg": round(
+            distance * EMISSION_FACTOR_KG_CO2_PER_KM,
+            2,
+        ),
         "uco_collected_kg": round(uco, 1),
         "uco_kg_per_km": round(uco / distance, 2) if distance else 0.0,
     }
 
-
-def calculate_scenario_comparison(stations: pd.DataFrame) -> pd.DataFrame:
+def calculate_scenario_comparison(
+    stations: pd.DataFrame,
+    distance_matrix_km: list[list[float]],
+    duration_matrix_min: list[list[float]],
+    node_index: dict[int, int],
+) -> pd.DataFrame:
     """Compare station selection and visit-sequence intelligence separately."""
-    all_stations = stations.sort_values("station_id").reset_index(drop=True)
+
+    all_stations = (
+        stations
+        .sort_values("station_id")
+        .reset_index(drop=True)
+    )
+
     priority_stations = operational_priority_selection(stations)
 
-    scenario_a_route = [DEPOT.copy(), *all_stations.to_dict("records"), DEPOT.copy()]
-    scenario_b_route = [DEPOT.copy(), *priority_stations.to_dict("records"), DEPOT.copy()]
-    scenario_c_route = two_opt(nearest_neighbour(priority_stations))
+    scenario_a_route = [
+        DEPOT.copy(),
+        *all_stations.to_dict("records"),
+        DEPOT.copy(),
+    ]
+
+    scenario_b_route = [
+        DEPOT.copy(),
+        *priority_stations.to_dict("records"),
+        DEPOT.copy(),
+    ]
+
+    scenario_c_route = two_opt(
+        nearest_neighbour(
+            priority_stations,
+            distance_matrix_km,
+            node_index,
+        ),
+        distance_matrix_km,
+        node_index,
+    )
 
     rows = [
         scenario_metrics(
@@ -123,22 +284,33 @@ def calculate_scenario_comparison(stations: pd.DataFrame) -> pd.DataFrame:
             "All stations + fixed collection sequence",
             scenario_a_route,
             all_stations,
+            distance_matrix_km,
+            duration_matrix_min,
+            node_index,
         ),
+
         scenario_metrics(
             "B — Smart Collection",
             "Operational priority stations only + fixed sequence",
             scenario_b_route,
             priority_stations,
+            distance_matrix_km,
+            duration_matrix_min,
+            node_index,
         ),
+
         scenario_metrics(
             "C — OIL2ENERGY",
-            "Operational priority stations + heuristic route optimisation",
+            "Operational priority stations + road-network heuristic route optimisation",
             scenario_c_route,
             priority_stations,
+            distance_matrix_km,
+            duration_matrix_min,
+            node_index,
         ),
     ]
-    return pd.DataFrame(rows)
 
+    return pd.DataFrame(rows)
 
 def create_route_map(selected: pd.DataFrame, baseline: list[dict], optimized: list[dict]) -> go.Figure:
     colors = {"MEDIUM": "#eab308", "HIGH": "#f97316", "CRITICAL": "#dc2626"}
@@ -185,20 +357,59 @@ def run_route_optimization(stations: pd.DataFrame | None = None, save: bool = Tr
         else:
             stations = pd.read_csv(DATA_PATH)
     # Minimum-five selection applies only to the interactive route demonstration.
-    selected = demo_selection(stations)
-    station_records = selected.sort_values("station_id").to_dict("records")
-    baseline = [DEPOT.copy(), *station_records, DEPOT.copy()]
-    optimized = two_opt(nearest_neighbour(selected))
+    distance_matrix_km, duration_matrix_min, node_index = build_network_costs(stations)
 
-    baseline_distance = route_distance(baseline)
-    optimized_distance = route_distance(optimized)
+    selected = demo_selection(stations)
+
+    station_records = selected.sort_values("station_id").to_dict("records")
+
+    baseline = [DEPOT.copy(), *station_records, DEPOT.copy()]
+
+    optimized = two_opt(
+        nearest_neighbour(
+            selected,
+            distance_matrix_km,
+            node_index,
+        ),
+        distance_matrix_km,
+        node_index,
+    )
+
+    baseline_distance = route_distance(
+        baseline,
+        distance_matrix_km,
+        node_index,
+    )
+
+    optimized_distance = route_distance(
+        optimized,
+        distance_matrix_km,
+        node_index,
+    )
+    baseline_duration = route_cost(
+        baseline,
+        duration_matrix_min,
+        node_index,
+    )
+
+    optimized_duration = route_cost(
+        optimized,
+        duration_matrix_min,
+        node_index,
+    )
+
     total_uco = float(selected["current_uco_kg"].sum())
     saved = baseline_distance - optimized_distance
+    driving_time_saved = baseline_duration - optimized_duration
+
     results = {
         "baseline_distance_km": round(baseline_distance, 2),
         "optimized_distance_km": round(optimized_distance, 2),
         "distance_saved_km": round(saved, 2),
         "distance_reduction_pct": round(saved / baseline_distance * 100, 1) if baseline_distance else 0.0,
+        "baseline_driving_time_min": round(baseline_duration, 1),
+        "optimized_driving_time_min": round(optimized_duration, 1),
+        "driving_time_saved_min": round(driving_time_saved, 1),
         "total_uco_collected_kg": round(total_uco, 1),
         "baseline_kg_per_km": round(total_uco / baseline_distance, 2) if baseline_distance else 0.0,
         "optimized_kg_per_km": round(total_uco / optimized_distance, 2) if optimized_distance else 0.0,
@@ -219,8 +430,12 @@ def run_route_optimization(stations: pd.DataFrame | None = None, save: bool = Tr
         })
     optimized_route = pd.DataFrame(route_rows)
     figure = create_route_map(selected, baseline, optimized)
-    scenarios = calculate_scenario_comparison(stations)
-
+    scenarios = calculate_scenario_comparison(
+        stations,
+        distance_matrix_km,
+        duration_matrix_min,
+        node_index,
+    )
     if save:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         pd.DataFrame([results]).to_csv(OUTPUT_DIR / "route_results.csv", index=False)
@@ -236,10 +451,15 @@ def print_summary(results: dict) -> None:
     print(DISCLAIMER)
     print("Heuristic route optimisation: nearest-neighbour + 2-opt; no global optimum is established.")
     print(f"Stations visited: {results['number_of_stations_visited']}")
-    print(f"Demo fixed-sequence geographic distance: {results['baseline_distance_km']:.2f} km")
-    print(f"Demo heuristic geographic distance: {results['optimized_distance_km']:.2f} km")
-    print(f"Simulation result — distance reduction: {results['distance_reduction_pct']:.1f}%")
-    print(f"Estimated CO2 avoided: {results['co2_avoided_kg']:.2f} kg")
+    print(f"Fixed-sequence road-network driving distance: {results['baseline_distance_km']:.2f} km")
+    print(f"Heuristic road-network driving distance: {results['optimized_distance_km']:.2f} km")
+    print(f"Simulation result — road-distance reduction: {results['distance_reduction_pct']:.1f}%")
+    print(f"Fixed-sequence driving time: {results['baseline_driving_time_min']:.1f} min")
+
+    print(f"Heuristic driving time: {results['optimized_driving_time_min']:.1f} min")
+
+    print(f"Estimated driving time saved: {results['driving_time_saved_min']:.1f} min")
+    print(f"Estimated operational CO2 reduction: {results['co2_avoided_kg']:.2f} kg")
     print(f"UCO collected: {results['total_uco_collected_kg']:.1f} kg")
     print(f"Saved outputs to: {OUTPUT_DIR}")
 
